@@ -22,8 +22,32 @@ h2orf.params=list(
 )
 
 h2odeep.params=list(
-  nthreads=7,
-  max_mem_size="24G"
+  nthreads=2,
+  max_mem_size="4G",
+  hidden=c(200), #(80,40,20)
+  seed=1234,
+  epochs = 0, #20
+  adaptive_rate = F,
+  score_validation_samples = 1500,
+  score_training_samples = round(nrow(train)*0.5),
+  train_samples_per_iteration= 0,
+  activation="RectifierWithDropout",
+  momentum_start = 0.2,
+  momentum_stable = 0.99,
+  momentum_ramp = 100,
+  rate =0.001, #0.005
+  l2 = 0.0002, #0.002
+  l1 = 0.0001,
+  hidden_dropout_ratios = c(0.5), #c(0.5,0.5,0.5)
+  initial_weight_distribution="Normal",
+  distribution="multinomial",
+  loss="CrossEntropy",
+  balance_classes=T,
+  fast_mode = F,
+  stopping_rounds = 10,
+  stopping_metric= "MSE",
+  quiet_mode=F,
+  nesterov_accelerated_gradient=T
   )
 
 CV=function(train,test,clase,nfolds,part,algoritmo,params,metrica,multiclass,probabilities){
@@ -110,7 +134,32 @@ CV=function(train,test,clase,nfolds,part,algoritmo,params,metrica,multiclass,pro
         test=train[-folds[[i]],]
         htrain=as.h2o(train[folds[[i]],],destination_frame = "train")
         htest=as.h2o(train[-folds[[i]],],destination_frame = "test")
-        model=h2o.deep
+        model=h2o.deeplearning(x=colnames(train)[c(1:ncol(train))[-indice.clase]],y=colnames(train)[indice.clase],training_frame = "train",
+                               hidden=h2odeep.params$hidden,
+                               seed=h2odeep.params$seed,
+                               epochs = h2odeep.params$epochs,
+                               adaptive_rate = h2odeep.params$adaptive_rate,
+                               score_validation_samples = h2odeep.params$score_validation_samples,
+                               score_training_samples = h2odeep.params$score_training_samples,
+                               train_samples_per_iteration= h2odeep.params$train_samples_per_iteration,
+                               activation=h2odeep.params$activation,
+                               momentum_start = h2odeep.params$momentum_start,
+                               momentum_stable = h2odeep.params$momentum_stable,
+                               momentum_ramp = h2odeep.params$momentum_ramp,
+                               rate =h2odeep.params$rate, 
+                               l2 = h2odeep.params$l2, 
+                               l1 = h2odeep.params$l1,
+                               hidden_dropout_ratios = h2odeep.params$hidden_dropout_ratios, 
+                               initial_weight_distribution=h2odeep.params$initial_weight_distribution,
+                               distribution=h2odeep.params$distribution,
+                               loss=h2odeep.params$loss,
+                               balance_classes=h2odeep.params$balance_classes,
+                               fast_mode = h2odeep.params$fast_mode,
+                               stopping_rounds = h2odeep.params$stopping_rounds,
+                               stopping_metric= h2odeep.params$stopping_metric,
+                               quiet_mode=h2odeep.params$quiet_mode,
+                               nesterov_accelerated_gradient=h2odeep.params$nesterov_accelerated_gradient)
+    })
     }
 
   resumen=data.frame(rbind(unlist(cv)),mean(unlist(cv)),sd(unlist(cv)))
