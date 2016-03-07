@@ -22,11 +22,11 @@ h2orf.params=list(
 )
 
 h2odeep.params=list(
-  nthreads=2,
-  max_mem_size="4G",
-  hidden=c(200), #(80,40,20)
+  nthreads=4,
+  max_mem_size="15G",
+  hidden=c(370), #(80,40,20)
   seed=1234,
-  epochs = 0, #20
+  epochs = 10, #20
   adaptive_rate = F,
   score_validation_samples = 1500,
   score_training_samples = round(nrow(train)*0.5),
@@ -50,13 +50,13 @@ h2odeep.params=list(
   nesterov_accelerated_gradient=T
   )
 
-CV=function(train,test,clase,nfolds,part,algoritmo,params,metrica,multiclass,probabilities){
+CV=function(train,test,clase,nfolds,algoritmo,params,metrica,multiclass,probabilities){
   library(caret)
-  library(AUC)
   library(knitr)
   indice.clase=match(clase,colnames(train))
-  folds=createDataPartition(y=train[,indice.clase],times=nfolds,p=part) #Crea particiones
+  folds=createFolds(y=train[,indice.clase],k = nfolds,list = T) #Crea particiones
   if(metrica=="auc"){
+    library(AUC)
     evalua=function(pred,test){
       if(!is.factor(test[,indice.clase])){
         test[,indice.clase]=as.factor(test[,indice.clase])
@@ -96,8 +96,8 @@ CV=function(train,test,clase,nfolds,part,algoritmo,params,metrica,multiclass,pro
 
     cv=lapply(1:nfolds,function(i){
       test=train[-folds[[i]],]
-      xtrain=xgb.DMatrix(data=data.matrix(train[folds[[i]],-indice.clase]),label=train[folds[[i]],indice.clase])
-      xtest=xgb.DMatrix(data=data.matrix(train[-folds[[i]],-indice.clase]),label=train[-folds[[i]],indice.clase])
+      xtrain=xgb.DMatrix(data=data.matrix(train[-folds[[i]],-indice.clase]),label=train[-folds[[i]],indice.clase])
+      xtest=xgb.DMatrix(data=data.matrix(train[folds[[i]],-indice.clase]),label=train[folds[[i]],indice.clase])
       model=xgboost(data=xtrain,params=params,nrounds=params$nrounds)
       pred=predict(model,xtest)
       metrica=evalua(pred,test)
@@ -112,9 +112,9 @@ CV=function(train,test,clase,nfolds,part,algoritmo,params,metrica,multiclass,pro
     h2o.init(ip = "localhost",port=54321,startH2O = T,nthreads = h2orf.params$nthreads,max_mem_size = h2orf.params$max_mem_size)
     train[,indice.clase]=as.factor(train[,indice.clase])
     cv=lapply(1:nfolds,function(i){
-      test=train[-folds[[i]],]
-      htrain=as.h2o(train[folds[[i]],],destination_frame = "train")
-      htest=as.h2o(train[-folds[[i]],],destination_frame = "test")
+      test=train[folds[[i]],]
+      htrain=as.h2o(train[-folds[[i]],],destination_frame = "train")
+      htest=as.h2o(train[folds[[i]],],destination_frame = "test")
       model=h2o.randomForest(x=c(1:ncol(train))[-indice.clase],y=indice.clase,training_frame = "train",
                              ntrees = h2orf.params$ntrees, max_depth = h2orf.params$max_depth,
                              mtries = h2orf.params$mtries, binomial_double_trees = h2orf.params$binomial_double_trees)
@@ -131,9 +131,9 @@ CV=function(train,test,clase,nfolds,part,algoritmo,params,metrica,multiclass,pro
       h2o.init(ip = "localhost",port=54321,startH2O = T,nthreads = h2odeep.params$nthreads,max_mem_size = h2odeep.params$max_mem_size)
       train[,indice.clase]=as.factor(train[,indice.clase])
       cv=lapply(1:nfolds,function(i){
-        test=train[-folds[[i]],]
-        htrain=as.h2o(train[folds[[i]],],destination_frame = "train")
-        htest=as.h2o(train[-folds[[i]],],destination_frame = "test")
+        test=train[folds[[i]],]
+        htrain=as.h2o(train[-folds[[i]],],destination_frame = "train")
+        htest=as.h2o(train[folds[[i]],],destination_frame = "test")
         model=h2o.deeplearning(x=colnames(train)[c(1:ncol(train))[-indice.clase]],y=colnames(train)[indice.clase],training_frame = "train",
                                hidden=h2odeep.params$hidden,
                                seed=h2odeep.params$seed,
@@ -159,6 +159,9 @@ CV=function(train,test,clase,nfolds,part,algoritmo,params,metrica,multiclass,pro
                                stopping_metric= h2odeep.params$stopping_metric,
                                quiet_mode=h2odeep.params$quiet_mode,
                                nesterov_accelerated_gradient=h2odeep.params$nesterov_accelerated_gradient)
+        pred=predict(model,htest)
+        metrica=evalua(as.data.frame(pred)[,3],test)
+        return(metrica)
     })
     }
 
