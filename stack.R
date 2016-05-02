@@ -5,6 +5,7 @@ library(e1071)
 library(xgboost)
 library(AUC)
 library(stringr)
+library(h2o)
 library(foreign) #Solo para cargar el conjunto de datos de prueba en formato arff
 setwd("~/Kaggle/Santander")
 
@@ -121,6 +122,79 @@ stack_xgboost=function(train,eta){
   parametros=paste("eta=",eta,sep='')
   añade(stacks,learners_train,learners_test,modelos,algoritmo,parametros)
 } 
+
+h2o.init(ip = "localhost",port = 54321,nthreads = 2,max_mem_size = "4G")
+
+#H2O Random Forests
+stack_h2orf=function(train,ntrees){
+  stacks=lapply(1:5,function(i,train,ntrees){
+    print(i)
+    train_stack=as.h2o(train[-folds[[i]],],destination_frame = "train_stack")
+    test_stack=as.h2o(train[folds[[i]],],destination_frame = "test_stack")
+    model=h2o.randomForest(x=setdiff(colnames(train_stack),colnames(train_stack)[ncol(train_stack)]),
+                           y=colnames(train_stack)[ncol(train_stack)],
+                           training_frame = "train_stack",
+                           ntrees=50,
+                           sample_rate=0.7,
+                           mtries=-1,
+                           stopping_metric = "AUC",
+                           stopping_rounds = 10,
+                           binomial_double_trees=T,
+                           balance_classes = T,
+                           seed=987654321
+                           )
+    pred_train=as.data.frame(predict(model,test_stack))[3]
+    pred_test=as.data.frame(predict(model,as.h2o(test,destination_frame = "test")))[3]
+    metrica=auc(roc(pred_train[,1],train[folds[[i]],ncol(train)]))
+    return(list(as.numeric(pred_train[,1]),as.numeric(pred_test[,1]),metrica))
+  },train,ntrees)
+  algoritmo="h2orf"
+  parametros=paste("ntrees=",ntrees,sep='')
+  añade(stacks,learners_train,learners_test,modelos,algoritmo,parametros)
+} 
+
+#H2O deep learning
+stack_h2odeep=function(train,activation,initial_weight_distribution,hidden,hidden_dropout_ratios,epochs,rate,l2){
+  stacks=lapply(1:5,function(i,train,activation,initial_weight_distribution,hidden,hidden_dropout_ratios,epochs,rate,l2){
+    print(i)
+    train_stack=as.h2o(train[-folds[[i]],],destination_frame = "train_stack")
+    test_stack=as.h2o(train[folds[[i]],],destination_frame = "test_stack")
+    model=h2o.deeplearning(x=setdiff(colnames(train_stack),colnames(train_stack)[ncol(train_stack)]),
+                           y=colnames(train_stack)[ncol(train_stack)],
+                           training_frame = "train_stack",
+                           activation =activation,
+                           hidden = hidden,
+                           hidden_dropout_ratios = hidden_dropout_ratios,
+                           epochs=epochs,
+                           adaptive_rate = F,
+                           initial_weight_distribution=initial_weight_distribution,
+                           loss="CrossEntropy",
+                           distribution="AUTO",
+                           l2=l2,
+                           rate=rate,
+                           momentum_start = 0.5,
+                           momentum_stable=0.99,
+                           momentum_ramp=200,
+                           nesterov_accelerated_gradient = T,
+                           stopping_rounds = 10,
+                           stopping_metric = "AUC",
+                           balance_classes = T,
+                           fast_mode=F,
+                           seed = 987654321
+    )
+    pred_train=as.data.frame(predict(model,test_stack))[3]
+    pred_test=as.data.frame(predict(model,as.h2o(test,destination_frame = "test")))[3]
+    metrica=auc(roc(pred_train[,1],train[folds[[i]],ncol(train)]))
+    return(list(as.numeric(pred_train[,1]),as.numeric(pred_test[,1]),metrica))
+  },train,activation,initial_weight_distribution,hidden,hidden_dropout_ratios,epochs,rate,l2)
+  algoritmo="h2odeep"
+  parametros=paste("activation=",activation," initial_weight_distribution",initial_weight_distribution," hidden",hidden," hidden_dropout_ratios",hidden_dropout_ratios,
+                   " epochs",epochs," rate",rate," l2",l2,sep='')
+  añade(stacks,learners_train,learners_test,modelos,algoritmo,parametros)
+} 
+
+
+
 
 ###Hay que revisar un poco a partir de aquí
 
