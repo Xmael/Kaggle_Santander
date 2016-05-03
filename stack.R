@@ -5,6 +5,7 @@ library(e1071)
 library(xgboost)
 library(AUC)
 library(stringr)
+library(strindist)
 library(h2o)
 library(foreign) #Solo para cargar el conjunto de datos de prueba en formato arff
 setwd("~/Kaggle/Santander")
@@ -13,16 +14,24 @@ df=read.arff("phoneme.dat")
 
 #Hay que cambiar el nombre de la columna clase a Class
 indice_clase=ncol(df) #Modificar esto si procede
-colnames(df)[indice]="Class"
+colnames(df)[indice_clase]="Class"
 nfolds=5 #Esto lo hacemos para no olvidarnos que en el siguiente nivel el número de particiones es una unidad menos
 
 indices=createDataPartition(df$Class,times=1,p=0.8)
 train=df[indices[[1]],]
-test=df[-indices[[1]],]
+test=df[-indices[[1]],-indice_clase]
 folds=createFolds(y=train$Class,k=nfolds,list=T)
-learners_train=NULL
-learners_test=NULL
-modelos=NULL
+
+inicializa=function(){
+  learners_train=NULL
+  learners_test=NULL
+  modelos=NULL
+  assign("learners_train",learners_train,envir = .GlobalEnv)
+  assign("learners_test",learners_test,envir = .GlobalEnv)
+  assign("modelos",modelos,envir = .GlobalEnv)
+}
+
+inicializa()
 
 añade=function(stacks,learners_train,learners_test,modelos,algoritmo,parametros){
   aux=rep(NA,nrow(train))
@@ -38,14 +47,14 @@ añade=function(stacks,learners_train,learners_test,modelos,algoritmo,parametros
     learners_test=cbind(learners_test,apply(sapply(1:5,function(i)stacks[[i]][[2]]),1,mean))
     print(head(learners_test))
     modelos=rbind(modelos,cbind(algoritmo=algoritmo,parametros=parametros,metrica=metrica))
+    colnames(learners_train)[ncol(learners_train)]=algoritmo
+    colnames(learners_test)[ncol(learners_test)]=algoritmo
+    assign(x = 'learners_train',value = learners_train,envir=.GlobalEnv)
+    assign(x = 'learners_test',value = learners_test,envir=.GlobalEnv)
+    assign(x = 'modelos',value = modelos,envir=.GlobalEnv)
   }else{
     print("Modelo rechazado")
   }
-  colnames(learners_train)[ncol(learners_train)]=algoritmo
-  colnames(learners_test)[ncol(learners_test)]=algoritmo
-  assign(x = 'learners_train',value = learners_train,envir=.GlobalEnv)
-  assign(x = 'learners_test',value = learners_test,envir=.GlobalEnv)
-  assign(x = 'modelos',value = modelos,envir=.GlobalEnv)
 }
 
 ####KNN
@@ -74,7 +83,7 @@ stack_rf=function(train,test,folds,ntree){
     test_stack=train[folds[[i]],]
     model=randomForest(Class~.,data=train_stack,ntree=ntree,do.trace=T)
     pred_train=predict(model,test_stack[,-ncol(test_stack)],type="prob")
-    pred_test=predict(model,test[,-ncol(test)],type="prob")
+    pred_test=predict(model,test,type="prob")
     metrica=auc(roc(pred_train[,2],test_stack[,ncol(test_stack)]))
     return(list(pred_train[,2],pred_test[,2],metrica))
   },train,test,folds,ntree)
@@ -82,7 +91,7 @@ stack_rf=function(train,test,folds,ntree){
   parametros=paste("ntree=",ntree,sep='')
   añade(stacks,learners_train,learners_test,modelos,algoritmo,parametros)
 }
-  
+
 #SVM
 stack_svm=function(train,test,folds,kernel){
   stacks=lapply(1:5,function(i,train,folds,kernel){
@@ -91,7 +100,7 @@ stack_svm=function(train,test,folds,kernel){
     test_stack=train[folds[[i]],]
     model=svm(x=train_stack[,-ncol(train_stack)],y=train_stack[,ncol(train_stack)],kernel="radial",probability=T,scale=F)
     pred_train=predict(model,test_stack[,-ncol(test_stack)],probability=T)
-    pred_test=predict(model,test[-ncol(test)],probability=T)
+    pred_test=predict(model,test,probability=T)
     metrica=auc(roc(attr(pred_train,"probabilities")[,2],test_stack[,ncol(test_stack)]))
     return(list(attr(pred_train,"probabilities")[,2],attr(pred_test,"probabilities")[,2],metrica))
   },train,folds,kernel)
@@ -101,18 +110,18 @@ stack_svm=function(train,test,folds,kernel){
 }
 
 params_xgboost=list(nthred=1,
-            objective = "binary:logistic",
-            booster="gbtree",
-            max_depth=10,
-            set.seed=123456789,
-            colsample_bytree = 0.6,
-            subsample = 0.8,
-            lambda = 1,
-            maximize = T,
-            eval_metric = "auc")
+                    objective = "binary:logistic",
+                    booster="gbtree",
+                    max_depth=10,
+                    set.seed=123456789,
+                    colsample_bytree = 0.6,
+                    subsample = 0.8,
+                    lambda = 1,
+                    maximize = T,
+                    eval_metric = "auc")
 
-stack_xgboost=function(train,test,folds,eta){
-  stacks=lapply(1:5,function(i,train,test,folds,eta){
+stack_xgboost=function(train,test,folds,eta,nrounds){
+  stacks=lapply(1:5,function(i,train,test,folds,eta,nrounds){
     print(i)
     train_stack=xgb.DMatrix(data=data.matrix(train[-folds[[i]],-ncol(train)]),label=as.numeric(levels(train$Class[-folds[[i]]]))[train$Class[-folds[[i]]]])
     test_stack=xgb.DMatrix(data=data.matrix(train[folds[[i]],-ncol(train)]),label=as.numeric(levels(train$Class[folds[[i]]]))[train$Class[folds[[i]]]])
@@ -121,7 +130,7 @@ stack_xgboost=function(train,test,folds,eta){
     pred_test=predict(model,xgb.DMatrix(data=data.matrix(test)))
     metrica=auc(roc(pred_train,train[folds[[i]],ncol(train)]))
     return(list(pred_train,pred_test,metrica))
-  },train,test,folds,eta)
+  },train,test,folds,eta,nrounds)
   algoritmo="xgboost"
   parametros=paste("eta=",eta,sep='')
   añade(stacks,learners_train,learners_test,modelos,algoritmo,parametros)
@@ -146,7 +155,7 @@ stack_h2orf=function(train,test,folds,ntrees){
                            binomial_double_trees=T,
                            balance_classes = T,
                            seed=987654321
-                           )
+    )
     pred_train=as.data.frame(predict(model,test_stack))[3]
     pred_test=as.data.frame(predict(model,as.h2o(test,destination_frame = "test")))[3]
     metrica=auc(roc(pred_train[,1],train[folds[[i]],ncol(train)]))
@@ -197,28 +206,35 @@ stack_h2odeep=function(train,test,folds,activation,initial_weight_distribution,h
   añade(stacks,learners_train,learners_test,modelos,algoritmo,parametros)
 } 
 
-
-stack_rf(train=train,test=test,folds=folds,ntree)
-stack_svm(train=train,test=test,folds=folds,kernel)
-stack_xgboost(train=train,test=test,folds=folds,eta)
-stack_h2orf(train=train,test=test,folds=folds,ntrees)
+stack_knn(train=train,test=test,folds=folds,k=13)
+stack_rf(train=train,test=test,folds=folds,ntree=50)
+stack_svm(train=train,test=test,folds=folds,kernel="radial")
+stack_xgboost(train=train,test=test,folds=folds,eta=0.5,nrounds=20)
+stack_h2orf(train=train,test=test,folds=folds,ntrees=100)
 stack_h2odeep(train=train,test=test,folds=folds,activation=,initial_weight_distribution=,
               hidden=,hidden_dropout_ratios=,epochs=,rate=,l2=)
-  
+
+learners_train_bak=learners_train
+learners_test_bak=learners_test
 
 ###Hay que revisar un poco a partir de aquí
-lee=readline(prompt = "Quiere añadir el conjunto de características inicial? [Y]/[N]: ")
-if(str_to_upper(lee)=="Y" | stro_to_upper(lee)==""){
-  learners_train=data.frame(learners_train,train)
-  learners_test=data.frame(learners_test,test)
-}else{
-  learners_train=as.data.frame(learners_train)
-  learners_train$Class=train$Class
-  learners_test=as.data.frame(learners_test)
+construye=function(learners_train,learners_test){
+  lee=readline(prompt = "Quiere añadir el conjunto de características inicial? [Y]/[N]: ")
+  if(str_to_upper(lee)=="Y" | str_to_upper(lee)==""){
+    learners_train=data.frame(learners_train,train)
+    learners_test=data.frame(learners_test,test)
+  }else{
+    learners_train=as.data.frame(learners_train)
+    learners_train$Class=train$Class
+    learners_test=as.data.frame(learners_test)
+  }
+  colnames(learners_train)[-ncol(learners_train)]=paste("X",c(1:(ncol(learners_train)-1)),sep="")
+  colnames(learners_test)=paste("X",c(1:ncol(learners_test)),sep="")
+  assign("learners_train",learners_train,envir = .GlobalEnv)
+  assign("learners_test",learners_test,envir=.GlobalEnv)
 }
 
-colnames(learners_train)[-ncol(learners_train)]=paste("X",c(1:(ncol(learners_train)-1)),sep="")
-colnames(learners_test)=paste("X",c(1:ncol(learners_test)),sep="")
+construye(learners_train = learners_train, learners_test = learners_test)
 
 #Guardamos el stack del primer nivel
 
@@ -231,27 +247,24 @@ learners_train=NULL
 learners_test=NULL
 modelos=NULL
 
-stack_rf(train=learners_train_1st,test=learners_test_1st,folds=pfolds,ntree)
+stack_knn(train=learners_train_1st,test=learners_test_1st,folds=pfolds,k=7)
+stack_rf(train=learners_train_1st,test=learners_test_1st,folds=pfolds,ntree=50)
 stack_svm(train=learners_train_1st,test=learners_test_1st,folds=pfolds,kernel)
 stack_xgboost(train=learners_train_1st,test=learners_test_1st,folds=pfolds,eta)
 stack_h2orf(train=learners_train_1st,test=learners_test_1st,folds=pfolds,ntrees)
 stack_h2odeep(train=learners_train_1st,test=learners_test_1st,folds=pfolds,activation=,initial_weight_distribution=,
               hidden=,hidden_dropout_ratios=,epochs=,rate=,l2=)
 
-lee=readline(prompt = "Quiere añadir el conjunto de características inicial? [Y]/[N]: ")
-if(str_to_upper(lee)=="Y" | stro_to_upper(lee)==""){
-  learners_train=data.frame(learners_train,train)
-  learners_test=data.frame(learners_test,test)
-}else{
-  learners_train=as.data.frame(learners_train)
-  learners_train$Class=train$Class
-  learners_test=as.data.frame(learners_test)
-}
+construye(learners_train = learners_train, learners_test = learners_test )
+
+learners_train_2nd=learners_train
+learners_test_2nd=learner_test
+modelos_2nd=modelos
 
 #######
 stacking=sapply(1:10,function(i){
-  model=randomForest(Class~.,data=learners_train,ntree=50,type="prob")
-  pred=predict(model,learners_test,type="prob")
+  model=randomForest(Class~.,data=learners_train_2nd,ntree=50,type="prob")
+  pred=predict(model,learners_test_2nd,type="prob")
   return(auc(roc(pred[,2],test[,ncol(test)]),min=0,max = 1))
 })
 
